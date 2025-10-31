@@ -1,0 +1,57 @@
+# =================================
+# PROJECT-SPECIFIC IGNORES
+# =================================
+
+# ALL model weights (too large for GitHub)
+*.pth
+*.pt
+*.engine
+
+# ALL datasets and data files
+*.npy
+*.npz
+
+# Dataset folders
+dataset/
+dataset_frames/
+datasets/
+pose_data/
+pose_npy_output/
+detections/
+runs/
+
+# Virtual environment
+myenv/
+
+# IDE and editor files
+.vscode/
+.vs/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Specific large files in your root
+behavior_escalation_labels.npy
+X_fighting.npy
+y_fighting.npy
+tcn_model.pth
+fusion_mlp_balanced.pth
+
+# YOLO models (all variants - they're huge!)
+yolov*.pt
+yolov*.pth
+
+# =================================
+# KEEP THESE FILES (Don't ignore)
+# =================================
+!requirements.txt
+!README.md
+!setup.sql
+!data.yaml
+!src/
+!scriptsrevised/          # Keep your source code for now
+!experiments/plots/       # Keep result images
