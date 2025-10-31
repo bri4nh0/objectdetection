@@ -1,0 +1,125 @@
+┌─────────────────────────────────────────────────────────────────┐
+│                    MULTIMODAL THREAT DETECTION SYSTEM           │
+│                 (Temporal Risk Dynamics + Uncertainty)          │
+└─────────────────────────────────────────────────────────────────┘
+
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      INPUT STREAM                               │
+│              RTMP/Video File/Camera Feed                        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FRAME READER                                │
+│           (scriptsrevised/multimodal.py)                       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   OBJECT        │    │     POSE        │    │   BEHAVIOR     │
+│  DETECTION      │    │   ESTIMATION    │    │   ANALYSIS     │
+│  (YOLOv8)       │    │   (YOLOv8-pose) │    │ (Attention1DCNN)│
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                      │                      │
+         ▼                      ▼                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 CURRENT RISK VECTOR CALCULATION                │
+│        [object_risk, behavior_risk, proximity_risk]            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              RISK SEQUENCE BUFFER (20 frames)                  │
+│        Maintains temporal context for risk assessment          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                      ┌───────────────┐
+                      │ RISK DYNAMICS │◄── NEW COMPONENT
+                      │ MATHEMATICS   │
+                      └───────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              TEMPORAL RISK ASSESSMENT                          │
+│        (EfficientTemporalGRU + Bayesian Uncertainty)           │◄── NEW
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                UNCERTAINTY QUANTIFICATION                      │◄── NEW
+│          Monte Carlo Dropout + Confidence Intervals            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 FUSION & DECISION MAKING                       │
+│     Combine temporal prediction with uncertainty               │◄── ENHANCED
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  VISUALIZATION & OUTPUT                        │
+│  Risk levels, uncertainty bands, threat escalation warnings    │◄── ENHANCED
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    DATABASE LOGGING                            │
+│     Temporal metrics, uncertainty, risk dynamics              │◄── ENHANCED
+└─────────────────────────────────────────────────────────────────┘
+
+1. Input Frame
+   │
+   ├── YOLO Object Detection → obj_boxes, obj_classes, obj_centers
+   ├── YOLO Pose Estimation → poses, centers  
+   └── Behavior Analysis → behavior_risk
+   │
+2. Current Risk Calculation
+   │
+   ├── object_risk = category_risk[object_type]
+   ├── behavior_risk = behavior_model(pose_sequence)  
+   └── proximity_risk = 1/(distance + 1)
+   │
+3. Risk Sequence Update
+   │
+   ├── Append [object_risk, behavior_risk, proximity_risk] to buffer
+   └── Maintain last 20 frames
+   │
+4. Temporal Risk Assessment (NEW)
+   │
+   ├── If buffer_full(20 frames):
+   │   ├── risk_dynamics = RiskDynamicsMathematics(risk_sequence)
+   │   ├── temporal_pred, uncertainty = TemporalGRU(risk_sequence)
+   │   └── phase_transitions = risk_dynamics.detect_phase_transitions()
+   │
+5. Enhanced Decision Making
+   │
+   ├── final_risk = apply_uncertainty_calibration(temporal_pred, uncertainty)
+   ├── If phase_transition_detected: issue_early_warning()
+   └── enhanced_visualization(final_risk, uncertainty, risk_velocity)
+   │
+6. Advanced Logging (NEW)
+   │
+   └── Log: risk_velocity, risk_acceleration, uncertainty, phase_transitions
+
+src/
+├── multimodal.py                    # Enhanced main system
+├── models/
+│   ├── temporal_risk.py            # NEW: Temporal model
+│   ├── attention_1dcnn.py          # Existing behavior model
+│   └── fusion_mlp.py               # Existing fusion model
+├── utils/
+│   ├── risk_dynamics.py            # NEW: Math framework
+│   ├── logger.py                   # Enhanced logging
+│   └── visualizer.py               # Enhanced visualization
+├── training/
+│   ├── train_temporal.py           # NEW: Temporal model training
+│   ├── train_behavior.py           # Existing
+│   └── train_fusion.py             # Existing
+└── validation/
+    ├── risk_metrics.py             # NEW: Doctoral metrics
+    ├── compare_modes.py            # NEW: A/B testing
+    └── temporal_analysis.py        # NEW: Risk dynamics validation
