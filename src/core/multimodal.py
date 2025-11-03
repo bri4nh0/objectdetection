@@ -112,8 +112,8 @@ class FrameReader:
 class MultimodalDangerousEventRecognizer:
     def __init__(self):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model = YOLO('yolov8sbest.pt')
-        self.pose_model = YOLO('yolov8s-pose.pt')
+        self.model = YOLO('models/yolo/yolov8sbest.pt')
+        self.pose_model = YOLO('models/yolo/yolov8s-pose.pt')
         self.model.conf = 0.3
         self.pose_model.conf = 0.3
 
@@ -123,11 +123,11 @@ class MultimodalDangerousEventRecognizer:
         self.EMA_DECAY = 0.7
 
         self.behavior_model = Attention1DCNN(input_dim=34, num_classes=2).to(self.device)
-        self.behavior_model.load_state_dict(torch.load('results/attention_1dcnn_behavior.pth', map_location=self.device))
+        self.behavior_model.load_state_dict(torch.load('models/fusion/attention_1dcnn_behavior.pth', map_location=self.device))
         self.behavior_model.eval()
 
         self.fusion_model = FusionMLP(input_size=3)
-        self.fusion_model.load_state_dict(torch.load("fusion_mlp_balanced.pth", map_location=self.device))
+        self.fusion_model.load_state_dict(torch.load("models/fusion/fusion_mlp_balanced.pth", map_location=self.device))
         self.fusion_model.to(self.device).eval()
 
         self.logger = UnifiedLogger({
