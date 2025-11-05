@@ -3,37 +3,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from collections import deque, defaultdict
+try:
+    from config_manager import config_manager
+except Exception:
+    config_manager = None
 
 class BayesianFusionLayer(nn.Module):
     def __init__(self):
         super().__init__()
         # Match the architecture of your original FusionMLP
-        self.fc = nn.Sequential(
-            nn.Linear(3, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
-        )
-        # Add uncertainty head that won't break loading
-        self.uncertainty_fc = nn.Sequential(
-            nn.Linear(32, 16),
-            nn.ReLU(),
-            nn.Linear(16, 1)
-        )
+        self.fc1 = nn.Linear(3, 64)
+        self.act1 = nn.ReLU()
+        self.do1 = nn.Dropout(p=0.2)
+        self.fc2 = nn.Linear(64, 32)
+        self.act2 = nn.ReLU()
+        self.do2 = nn.Dropout(p=0.2)
+        # Heads
+        self.mean_head = nn.Linear(32, 1)
+        self.log_var_head = nn.Linear(32, 1)
         
     def forward(self, x, mc_dropout=True):
-        # Main risk prediction
-        features = self.fc[:-2](x)  # Get features before last layer
-        risk_score = torch.sigmoid(self.fc[-2:](features)) * 4.0
-        
-        # Uncertainty estimation (only if we have uncertainty layers)
-        if hasattr(self, 'uncertainty_fc'):
-            uncertainty = F.softplus(self.uncertainty_fc(features))
-        else:
-            uncertainty = torch.zeros_like(risk_score)
-        
-        return risk_score, uncertainty
+        h = self.act1(self.fc1(x))
+        h = self.do1(h) if mc_dropout else h
+        h = self.act2(self.fc2(h))
+        h = self.do2(h) if mc_dropout else h
+        # Mean is constrained to [0,4] to match risk scale
+        mean = torch.sigmoid(self.mean_head(h)) * 4.0
+        # We predict a (real-valued) parameter for variance. Keep it as a direct
+        # output (log-like) and use a softplus during loss/estimation for stability.
+        log_var = self.log_var_head(h)
+        # Return mean and raw log_var so callers / training can construct a
+        # numerically-stable heteroscedastic loss (var = softplus(log_var) + eps)
+        return mean, log_var
 
 class TemporalRiskAnalyzer:
     def __init__(self, sequence_length=30):
@@ -89,26 +90,23 @@ class TRDUQSystem:
         
         # Try to load pre-trained weights with flexible loading
         try:
-            # First try to load the original fusion weights
-            original_state_dict = torch.load("models/fusion/fusion_mlp_balanced.pth", map_location='cpu')
-            
-            # Create a filtered state dict that matches our current architecture
-            filtered_state_dict = {}
-            for key, value in original_state_dict.items():
-                # Map old keys to new keys if necessary
-                if key in self.fusion_model.state_dict():
-                    filtered_state_dict[key] = value
-                elif key.replace('fc.2', 'fc.3') in self.fusion_model.state_dict():
-                    # Handle layer index changes
-                    new_key = key.replace('fc.2', 'fc.3')
-                    filtered_state_dict[new_key] = value
-                elif key.replace('fc.4', 'fc.5') in self.fusion_model.state_dict():
-                    new_key = key.replace('fc.4', 'fc.5')
-                    filtered_state_dict[new_key] = value
-            
-            # Load the compatible weights
-            self.fusion_model.load_state_dict(filtered_state_dict, strict=False)
-            print("✅ Loaded compatible pre-trained fusion weights for TRD-UQ")
+            cfg = getattr(config_manager, 'config', {}) if config_manager else {}
+            trd_cfg = cfg.get('trd_uq', {})
+            use_hetero = bool(trd_cfg.get('use_hetero_fusion', False))
+            if use_hetero and trd_cfg.get('hetero_model_path'):
+                path = trd_cfg.get('hetero_model_path')
+                state = torch.load(path, map_location='cpu')
+                self.fusion_model.load_state_dict(state, strict=False)
+                print(f"✅ Loaded heteroscedastic fusion weights: {path}")
+            else:
+                # Backward-compatible: try to ingest original FusionMLP weights best-effort
+                original_state_dict = torch.load("models/fusion/fusion_mlp_balanced.pth", map_location='cpu')
+                filtered_state_dict = {}
+                for key, value in original_state_dict.items():
+                    if key in self.fusion_model.state_dict():
+                        filtered_state_dict[key] = value
+                self.fusion_model.load_state_dict(filtered_state_dict, strict=False)
+                print("✅ Loaded compatible weights from fusion_mlp_balanced.pth (partial)")
             
         except Exception as e:
             print(f"⚠️ Could not load pre-trained weights: {e}")
@@ -126,16 +124,19 @@ class TRDUQSystem:
         
         with torch.no_grad():
             for _ in range(num_samples):
-                pred, unc = self.fusion_model(input_tensor, mc_dropout=True)
+                pred, log_var = self.fusion_model(input_tensor, mc_dropout=True)
+                # Convert predicted log-variance to a stable variance via softplus
+                var = F.softplus(log_var) + 1e-6
+                aleatoric_std = torch.sqrt(var)
                 predictions.append(pred.item())
-                uncertainties.append(unc.item())
+                uncertainties.append(aleatoric_std.item())
         
         # Switch back to eval mode
         self.fusion_model.eval()
                 
         mean_risk = np.mean(predictions)
         epistemic_uncertainty = np.std(predictions)  # Model uncertainty
-        aleatoric_uncertainty = np.mean(uncertainties)  # Data uncertainty
+        aleatoric_uncertainty = np.mean(uncertainties)  # Data uncertainty (avg predicted std)
         total_uncertainty = epistemic_uncertainty + aleatoric_uncertainty
         
         return mean_risk, total_uncertainty, epistemic_uncertainty, aleatoric_uncertainty

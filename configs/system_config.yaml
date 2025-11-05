@@ -1,0 +1,77 @@
+# System configuration template. Fill values for your environment.
+
+models:
+  yolo:
+    path: models/yolo/yolov8sbest.pt
+    confidence: 0.30
+  pose:
+    path: models/yolo/yolov8s-pose.pt
+    confidence: 0.30
+  behavior:
+    path: models/fusion/attention_1dcnn_behavior.pth
+  fusion:
+    path: models/fusion/fusion_mlp_balanced.pth
+
+experiments:
+  E1_PERFORMANCE:
+    name: System Performance Analysis
+    modules: [object, pose, behavior, fusion]
+    logging_level: performance
+    enable_uq: true
+  E2_FUSION_COMPARISON:
+    name: Fusion Method Comparison
+    modules: [object, pose, behavior, fusion]
+    logging_level: fusion
+    enable_uq: true
+  E3_SCENARIO_ANALYSIS:
+    name: Risk Scenario Analysis
+    modules: [object, pose, behavior, fusion]
+    logging_level: scenario
+    enable_uq: true
+  E4_UNCERTAINTY_QUANTIFICATION:
+    name: Uncertainty Quantification
+    modules: [object, pose, behavior, fusion]
+    logging_level: uncertainty
+    enable_uq: true
+  E5_ABLATION_STUDY:
+    name: Component Ablation Study
+    modules: [object, pose, behavior, fusion]
+    logging_level: ablation
+    enable_uq: true
+
+trd_uq:
+  mc_samples: 20
+  uncertainty_threshold: 0.80
+  sequence_length: 30
+  use_hetero_fusion: true
+  hetero_model_path: models/fusion/trd_uq_fusion_hetero.pth
+
+streaming:
+  # Live RTMP endpoint for deployment
+  rtmp_url: "http://172.22.48.1/live/livestream.flv"
+  frame_size: [1280, 720]
+  target_fps: 30
+
+visualization:
+  enable_dashboard: true
+  show_uncertainty: true
+  show_patterns: true
+
+calibration:
+  enable_platt: true
+  # Platt scaling parameters (learned offline via scripts). If missing, no scaling is applied.
+  a: 1.0
+  b: 0.0
+
+database:
+  host: localhost
+  user: root
+  password: "CHANGE_ME"          # do not commit secrets; use env or a private override
+  database: model_evaluation
+
+decision:
+  # Optional runtime threshold for critical; if absent, use discrete mapping only
+  risk_threshold_critical: null
+  use_threshold_override: true
+  threshold_source: conformal  # one of: conformal, fitted, manual
+

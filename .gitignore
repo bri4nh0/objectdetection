@@ -22,6 +22,20 @@ runs/
 
 # Virtual environment
 myenv/
+# Poetry/venv
+.venv/
+venv/
+
+# Local configs and secrets
+.env
+.env.*
+!configs/system_config.yaml
+
+# Logs and outputs
+logs/
+recordings/
+results/
+experiments/**/performance_report.txt
 
 # IDE and editor files
 .vscode/

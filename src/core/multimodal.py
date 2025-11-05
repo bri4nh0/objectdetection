@@ -10,11 +10,30 @@ from torch import nn
 from collections import deque
 from ultralytics import YOLO
 from datetime import datetime
+# Robust imports for sibling package `utils`
+try:
+    from src.utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
+    from src.utils.calibration import sigmoid
+except ImportError:
+    try:
+        from utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
+        from utils.calibration import sigmoid
+    except ImportError:
+        # As a last resort, fix sys.path at runtime
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(current_dir)
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        from utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
+        from utils.calibration import sigmoid
 
 
 # Add current directory to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 # Simple Performance Monitor implementation
 class SimplePerformanceMonitor:
@@ -232,7 +251,10 @@ class MultimodalDangerousEventRecognizer:
             self.pose_model = self.model
 
         self.pose_buffers = {}
-        self.escalation_ema = {}
+        # Per-person risk dynamics state
+        self.pid_ema = {}
+        self.pid_cusum = {}
+        self.pid_zscore = {}
         self.SEQ_LEN = 30
         self.EMA_DECAY = 0.7
 
@@ -260,17 +282,40 @@ class MultimodalDangerousEventRecognizer:
         self.trd_uq_system = TRDUQSystem()
         self.enable_uq = self.experiment_config.get('enable_uq', False)
         
-        # Enhanced logger
-        self.logger = EnhancedUnifiedLogger({
+        # Enhanced logger (from config)
+        db_cfg = getattr(config_manager, 'config', {}).get('database', {
             'host': 'localhost',
             'user': 'root',
             'password': 'Gth531$@',
             'database': 'model_evaluation'
         })
+        self.logger = EnhancedUnifiedLogger(db_cfg)
 
         # Experiment settings
         self.enable_dashboard = True
         self.system_variant = self._get_system_variant()
+        # Calibration config
+        calib_cfg = getattr(config_manager, 'config', {}).get('calibration', {})
+        self.calib_enable = bool(calib_cfg.get('enable_platt', False))
+        self.calib_a = float(calib_cfg.get('a', 1.0))
+        self.calib_b = float(calib_cfg.get('b', 0.0))
+        # Decision threshold
+        decision_cfg = getattr(config_manager, 'config', {}).get('decision', {})
+        self.critical_threshold = decision_cfg.get('risk_threshold_critical', None)
+        self.use_threshold_override = bool(decision_cfg.get('use_threshold_override', True))
+        self.threshold_source = decision_cfg.get('threshold_source', 'manual')
+
+        # Startup summary
+        trd_cfg = getattr(config_manager, 'config', {}).get('trd_uq', {})
+        print(f"   Calibration: {'ON' if self.calib_enable else 'OFF'} (a={self.calib_a}, b={self.calib_b})")
+        if self.critical_threshold is not None and self.use_threshold_override:
+            print(f"   Critical threshold override: {self.critical_threshold} (source={self.threshold_source})")
+        else:
+            print("   Critical threshold override: OFF (using discretization)")
+        if trd_cfg.get('use_hetero_fusion', False):
+            print(f"   Fusion weights: heteroscedastic ({trd_cfg.get('hetero_model_path')})")
+        else:
+            print("   Fusion weights: legacy FusionMLP-compatible (partial load)")
 
         print(f"✅ TRD-UQ System Initialized for {experiment_id}")
         print(f"   Uncertainty Quantification: {self.enable_uq}")
@@ -324,7 +369,10 @@ class MultimodalDangerousEventRecognizer:
 
     def run_experiment_loop(self):
         """Main experiment processing loop"""
-        RTMP_STREAM = "http://172.22.48.1/live/livestream.flv"
+        RTMP_STREAM = getattr(config_manager, 'config', {}).get('streaming', {}).get(
+            'rtmp_url',
+            "http://172.22.48.1/live/livestream.flv"
+        )
         
         # Label mappings
         label_aliases = {
@@ -485,13 +533,49 @@ class MultimodalDangerousEventRecognizer:
                         # Fallback fusion
                         fusion_score = (object_risk + behavior_risk + proximity_risk) / 3 * 4
 
-                    # EMA smoothing
-                    if pid not in self.escalation_ema:
-                        self.escalation_ema[pid] = fusion_score
-                    else:
-                        self.escalation_ema[pid] = self.EMA_DECAY * self.escalation_ema[pid] + (1 - self.EMA_DECAY) * fusion_score
+                    # Risk dynamics: EMA smoothing per person and CUSUM detection
+                    if pid not in self.pid_ema:
+                        alpha = max(0.05, min(0.95, 1.0 - float(self.EMA_DECAY)))
+                        self.pid_ema[pid] = ExponentialMovingAverage(alpha=alpha)
+                    smoothed = self.pid_ema[pid].update(fusion_score)
 
-                    final_risk = max(0, min(round(self.escalation_ema[pid]), 3))
+                    # Optional Platt calibration on normalized risk
+                    calibrated = smoothed
+                    if self.calib_enable:
+                        p_raw = max(0.0, min(1.0, smoothed / 4.0))
+                        p_cal = sigmoid(self.calib_a * p_raw + self.calib_b)
+                        calibrated = 4.0 * p_cal
+
+                    if pid not in self.pid_cusum:
+                        self.pid_cusum[pid] = OnlineCUSUM(CUSUMConfig(target_mean=1.2, drift=0.10, threshold=2.0, two_sided=True))
+                    detected, direction, s_pos, s_neg = self.pid_cusum[pid].update(calibrated)
+                    # OOD/shift heuristic on calibrated risk
+                    if pid not in self.pid_zscore:
+                        self.pid_zscore[pid] = OnlineZScore(min_count=20, z_thresh=3.0)
+                    z_val, ood_flag = self.pid_zscore[pid].update(calibrated)
+                    if detected and direction == 'up':
+                        risk_pattern = "escalating_cusum"
+                    elif detected and direction == 'down':
+                        risk_pattern = "deescalating_cusum"
+
+                    if ood_flag:
+                        risk_pattern = f"{risk_pattern}_ood" if risk_pattern else "ood"
+                        confidence = "low"
+                        # Inflate uncertainty if available
+                        try:
+                            uncertainty = float(uncertainty) + 0.2
+                        except Exception:
+                            pass
+
+                    final_risk = discretize_risk(calibrated)
+                    # Optional runtime override for CRITICAL
+                    if self.critical_threshold is not None and self.use_threshold_override:
+                        try:
+                            thr = float(self.critical_threshold)
+                            if calibrated >= thr:
+                                final_risk = 3
+                        except Exception:
+                            pass
                     escalation_labels = ["NORMAL", "HAZARD", "DANGEROUS", "CRITICAL"]
                     esc_label = escalation_labels[min(final_risk, len(escalation_labels)-1)]
 
@@ -513,9 +597,28 @@ class MultimodalDangerousEventRecognizer:
                     try:
                         self._log_experiment_data(
                             pid, fps, object_risk, behavior_risk, proximity_risk, 
-                            fusion_score, final_risk, raw_label, behavior_pred,
+                            float(calibrated), final_risk, raw_label, behavior_pred,
                             uncertainty, risk_pattern, confidence, trd_results if self.enable_uq else None
                         )
+                        # Log change-point events explicitly
+                        if detected:
+                            try:
+                                self.logger.log(
+                                    experiment_id=self.experiment_id,
+                                    frame_id=pid,
+                                    system_variant=self.system_variant,
+                                    module="change_point",
+                                    rule_score=1,
+                                    behavior_type=direction,
+                                    avg_fps=round(fps, 2),
+                                    frame_interval=1 / fps if fps > 0 else 0,
+                                    fusion_score=float(calibrated),
+                                    predicted_level=final_risk,
+                                    risk_pattern=risk_pattern,
+                                    confidence_level=confidence
+                                )
+                            except Exception as e:
+                                print(f"❌ CUSUM event logging error: {e}")
                     except Exception as e:
                         print(f"❌ Logging error: {e}")
 
