@@ -5,13 +5,45 @@ This document captures two concise novelty claims, the experimental plan require
 ## Working title
 Efficient Uncertainty Quantification for Multimodal Threat Detection: Tiny Deep Ensembles for Low-latency Fusion
 
-## 1–2 Novelty claims
+## Selected novelty claims
 
-1. Lightweight ensemble proxy: We introduce TinyDeepEnsemble, a low-cost ensemble proxy that computes a single shared forward pass through a heavy fusion backbone and instantiates per-member affine heads to estimate epistemic uncertainty with substantially lower latency and memory than standard deep ensembles or MC‑dropout, enabling near‑real-time uncertainty-aware multimodal fusion on edge GPUs.
+Below are the primary and secondary claims we will center the paper around. I selected these to maximize scientific impact while keeping the experimental scope feasible on an RTX 3050 Ti.
 
-2. Practical TRD‑UQ pipeline: We show that combining TinyDeepEnsemble with a runtime risk‑dynamics module (EMA + online CUSUM) and heteroscedastic fusion produces uncertainty estimates that are (a) more computationally efficient and (b) comparably calibrated to heavier baselines on held‑out labelled validation sets and OOD conditions relevant to dangerous event detection.
+Primary claims (core of the paper)
 
-Notes on claims: these are empirical claims. The acceptance criteria (below) map the exact experiments required to validate or refute each claim.
+1) TinyDeepEnsemble: a low‑cost ensemble proxy for real‑time UQ.
+- Statement: TinyDeepEnsemble computes a single shared forward pass through a heavy fusion backbone and applies per‑member affine heads to estimate epistemic uncertainty. This architecture reduces per‑sample latency substantially compared to MC‑dropout (T=30) and full deep ensembles while producing comparable probabilistic performance (NLL, Brier, ECE) on held‑out validation.
+- Why chosen: high engineering and practical value — addresses latency constraint for edge deployment and is already implemented as a prototype in the repo.
+
+2) Data‑efficient head-only UQ (operational training shortcut).
+- Statement: Head-only fine‑tuning of TinyDeepEnsemble (randomized head inits + low LR) achieves uncertainty quality comparable to full deep ensemble training while using substantially less compute and labeled data.
+- Why chosen: directly enables reproducible baselines for resource-limited labs and supports claim 1 by providing a practical training recipe.
+
+Secondary claims (supporting contributions / research prototypes)
+
+a) Low‑rank heteroscedastic fusion head (efficient aleatoric covariance).
+- Statement: A low‑rank parameterization for heteroscedastic fusion heads captures cross‑output aleatoric covariance with fewer parameters and acceptable latency overhead.
+- Why chosen: adds modelling depth and a clear empirical target (NLL improvement) without exploding experimental cost.
+
+b) Discounted belief (conflict-aware) fusion.
+- Statement: A discounted evidence fusion method that downweights conflicting modalities increases meaningful epistemic uncertainty in conflict/OOD cases and improves operational metrics such as false alarm rate at fixed recall when used in decision rules.
+- Why chosen: provides a decision-centric contribution that ties UQ into actionable behavior (human‑in‑the‑loop policies), strengthening the applied impact.
+
+How these map to experiments
+- Claim 1 → Experiment A (Latency vs probabilistic performance), Experiment B (Calibration ID & OOD), Experiment D (multi‑seed stats).
+- Claim 2 → Experiment C (Ablation: head-only vs full ensembles), plus compute-budget reporting.
+- Claim a → small additional experiments comparing hetero low‑rank vs diagonal hetero on NLL and latency.
+- Claim b → synthetic conflict scenarios and operational decision‑policy sims measuring false alarm/recall tradeoffs.
+
+Acceptance criteria (condensed)
+- Claim 1: TinyDeepEnsemble yields ≥3× latency reduction vs MC‑dropout (T=30) on RTX 3050 Ti while NLL/Brier differences are within bootstrap CI of baselines.
+- Claim 2: Head-only fine‑tuning achieves non‑inferior ECE/NLL to full ensembles while using ≤25% GPU-hours (or equivalent compute budget) for training.
+- Claim a: Low‑rank hetero reduces NLL vs diagonal hetero (statistically significant paired test, p<0.05) with <10% latency overhead.
+- Claim b: Discounted fusion increases predictive entropy in conflict scenarios and reduces false positives at similar recall (paired-test p<0.05).
+
+Notes
+- These claims keep experiments tightly scoped, focused on the repo’s strengths (TinyDeepEnsemble prototype, TRD‑UQ pipeline) and add two technical novelties that are experimentally tractable.
+
 
 ## Experiments to validate claims (overview)
 
