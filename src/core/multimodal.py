@@ -15,17 +15,17 @@ try:
     from src.utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
     from src.utils.calibration import sigmoid
 except ImportError:
-    try:
-        from utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
-        from utils.calibration import sigmoid
-    except ImportError:
-        # As a last resort, fix sys.path at runtime
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        parent_dir = os.path.dirname(current_dir)
-        if parent_dir not in sys.path:
-            sys.path.insert(0, parent_dir)
-        from utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
-        from utils.calibration import sigmoid
+        try:
+            from utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
+            from utils.calibration import sigmoid
+        except ImportError:
+            # As a last resort, fix sys.path at runtime
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            from utils.risk_dynamics import ExponentialMovingAverage, OnlineCUSUM, CUSUMConfig, OnlineZScore, discretize_risk
+            from utils.calibration import sigmoid
 
 
 # Add current directory to path
@@ -34,6 +34,15 @@ sys.path.insert(0, current_dir)
 parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
+
+# Tiny ensemble wrapper (low-cost prototype)
+try:
+    from src.core.ensembles import TinyDeepEnsemble
+except Exception:
+    try:
+        from core.ensembles import TinyDeepEnsemble
+    except Exception:
+        TinyDeepEnsemble = None
 
 # Simple Performance Monitor implementation
 class SimplePerformanceMonitor:
@@ -277,6 +286,17 @@ class MultimodalDangerousEventRecognizer:
         except Exception as e:
             print(f"❌ Fusion model loading failed: {e}")
             self.fusion_model = None
+
+        # Optionally wrap fusion model with TinyDeepEnsemble (low-cost ensemble of affine heads)
+        try:
+            trd_cfg_local = getattr(config_manager, 'config', {}).get('trd_uq', {})
+            if trd_cfg_local.get('use_tiny_ensemble', False) and self.fusion_model is not None and TinyDeepEnsemble is not None:
+                members = int(trd_cfg_local.get('tiny_ensemble_members', 4))
+                print(f"🔁 Wrapping fusion model with TinyDeepEnsemble (members={members})")
+                self.fusion_model = TinyDeepEnsemble(self.fusion_model, num_members=members).to(self.device)
+                self.fusion_model.eval()
+        except Exception as e:
+            print(f"❌ TinyDeepEnsemble wrapping failed: {e}")
 
         # TRD-UQ System
         self.trd_uq_system = TRDUQSystem()
@@ -523,7 +543,20 @@ class MultimodalDangerousEventRecognizer:
                         try:
                             start_fusion = time.time()
                             fusion_input = torch.tensor([proximity_risk, behavior_risk, object_risk], dtype=torch.float32).unsqueeze(0).to(self.device)
-                            fusion_score = self.fusion_model(fusion_input).item()
+                            # Support TinyDeepEnsemble which returns (mean, var)
+                            if TinyDeepEnsemble is not None and isinstance(self.fusion_model, TinyDeepEnsemble):
+                                mean_out, var_out = self.fusion_model(fusion_input)
+                                # take scalar
+                                try:
+                                    fusion_score = float(mean_out.squeeze().cpu().numpy())
+                                except Exception:
+                                    fusion_score = float(mean_out.item())
+                                try:
+                                    uncertainty = float(var_out.squeeze().cpu().numpy())
+                                except Exception:
+                                    uncertainty = float(var_out.item())
+                            else:
+                                fusion_score = self.fusion_model(fusion_input).item()
                             end_fusion = time.time()
                             performance_monitor.log_inference('standard_fusion', end_fusion - start_fusion)
                         except Exception as e:
