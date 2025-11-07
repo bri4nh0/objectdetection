@@ -41,8 +41,8 @@ def make_synthetic(seed: int = 1234, n: int = 128, dim: int = 16):
     return X, y
 
 
-def main():
-    X, y = make_synthetic()
+def main(seed: int = 1234):
+    X, y = make_synthetic(seed=seed)
     fn = os.path.join(DATA_DIR, "demo_synth.npz")
     np.savez(fn, X=X, y=y)
     print(f"Saved synthetic data -> {fn}")
@@ -79,4 +79,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--seed', type=int, default=1234)
+    args = parser.parse_args()
+    main(seed=args.seed)

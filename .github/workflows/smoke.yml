@@ -1,0 +1,42 @@
+name: Smoke tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          # install CPU-only PyTorch to avoid CUDA wheel issues on CI
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu || true
+          pip install -r requirements.txt || pip install -r requirements_enhanced.txt
+      - name: Run tests
+        run: |
+          python -m pytest -q
+      - name: Run demo prepare
+        run: |
+          python scripts/demo_prepare.py
+          python scripts/run_demo.py
+      - name: Build Docker image and run demo inside container
+        run: |
+          docker build -t trd-uq-demo -f Dockerfile . || true
+          # run the demo inside the container; fall back if docker isn't available on runner
+          if docker info >/dev/null 2>&1; then
+            docker run --rm trd-uq-demo python scripts/demo_prepare.py && docker run --rm trd-uq-demo python scripts/run_demo.py --device cpu
+          else
+            echo 'Docker not available on runner; skipping container smoke run'
+          fi
+      - name: Package results
+        run: |
+          ls -lah results || true

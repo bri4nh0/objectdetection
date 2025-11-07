@@ -7,6 +7,7 @@ Produces:
 import os
 import sys
 import json
+import argparse
 import numpy as np
 import torch
 
@@ -29,13 +30,23 @@ RESULTS_DIR = os.path.join(ROOT, "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
-def main(batch_size: int = 16):
+def main(batch_size: int = 16, device_arg: str = 'auto'):
     fn = os.path.join(DATA_DIR, "demo_synth.npz")
     if not os.path.exists(fn):
         raise FileNotFoundError("Run scripts/demo_prepare.py first to create demo data")
 
     data = np.load(fn)
     X = data["X"]
+
+    # resolve device
+    if device_arg == 'auto':
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        if device_arg.lower() == 'cuda' and not torch.cuda.is_available():
+            print('Requested cuda but not available; falling back to cpu')
+            device = torch.device('cpu')
+        else:
+            device = torch.device(device_arg)
 
     # load backbone and TDE
     backbone_ckpt = os.path.join(RESULTS_DIR, "demo_backbone.pth")
@@ -79,4 +90,8 @@ def main(batch_size: int = 16):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--device', type=str, default='auto', help="Device to run on: 'auto'|'cpu'|'cuda'")
+    args = parser.parse_args()
+    main(batch_size=args.batch_size, device_arg=args.device)

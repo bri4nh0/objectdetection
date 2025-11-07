@@ -1,3 +1,46 @@
+import time
+import json
+import numpy as np
+from typing import Dict, Any
+
+
+def nll_gaussian_np(mean: np.ndarray, var: np.ndarray, target: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    var = var + eps
+    return 0.5 * (np.log(var) + ((target - mean) ** 2) / var)
+
+
+def rmse(mean: np.ndarray, target: np.ndarray) -> float:
+    return float(np.sqrt(((mean - target) ** 2).mean()))
+
+
+def coverage_1sigma(mean: np.ndarray, var: np.ndarray, target: np.ndarray) -> float:
+    sigma = np.sqrt(var)
+    return float(((np.abs(mean - target) <= sigma)).mean())
+
+
+def summarize_predictions(mean: np.ndarray, var: np.ndarray, target: np.ndarray) -> Dict[str, Any]:
+    """Compute a standardized set of metrics for regression UQ outputs.
+
+    Returns a dict with NLL mean, RMSE, 1-sigma coverage and sample counts.
+    """
+    mean = np.asarray(mean).squeeze()
+    var = np.asarray(var).squeeze()
+    target = np.asarray(target).squeeze()
+
+    nlls = nll_gaussian_np(mean, var, target)
+    return {
+        "nll_mean": float(np.mean(nlls)),
+        "nll_std": float(np.std(nlls)),
+        "rmse": rmse(mean, target),
+        "coverage_1sigma": coverage_1sigma(mean, var, target),
+        "n_samples": int(mean.shape[0]) if mean.ndim >= 1 else 1,
+    }
+
+
+def write_results_file(out_path: str, run_metadata: Dict[str, Any], metrics: Dict[str, Any]):
+    payload = {"run": run_metadata, "metrics": metrics}
+    with open(out_path, "w") as f:
+        json.dump(payload, f, indent=2)
 import os
 import json
 import numpy as np

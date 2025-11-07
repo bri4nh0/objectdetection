@@ -1,73 +1,76 @@
 import torch
 from torch import nn
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 
 class DiscountedFusion(nn.Module):
-    """A small learnable module that predicts per-modality discount weights
-    and applies them to concatenated modality features before a fusion MLP.
+    """Simple learnable discounted fusion.
 
-    Usage (prototype):
-    - Build concatenated features = [mod1_feats | mod2_feats | ...]
-    - Provide `modality_slices` as a list of (start, end) indices for each modality
-      inside the concatenated vector. If omitted, a single global discount is used.
-    - The module predicts a scalar weight in (0,1) per modality using a tiny MLP
-      (global-average pooling followed by two-layer net + sigmoid).
+    Usage:
+      - Provide modality sizes (list of ints) for how to slice the input feature vector.
+      - The module predicts a scalar discount weight per modality in [0,1]
+        and applies it to each modality's features before concatenation.
 
-    This is a non-invasive prototype: it can be placed before an existing
-    FusionMLP by calling `discounted = DiscountedFusion(...)(concat_feats)`
-    and then passing `discounted` into the fusion network.
+    This is intentionally small: a two-layer MLP that consumes per-modal
+    pooled features and outputs weights.
     """
 
-    def __init__(self, input_dim: int, modality_slices: Optional[List[Tuple[int, int]]] = None, hidden: int = 32):
+    def __init__(self, modality_sizes: List[int], hidden: int = 32):
         super().__init__()
-        self.input_dim = int(input_dim)
-        self.modality_slices = modality_slices
-        self.hidden = int(hidden)
+        self.modality_sizes = list(modality_sizes)
+        self.n_modalities = len(modality_sizes)
 
-        # if modality_slices is None we predict a single global discount
-        self.num_modalities = len(modality_slices) if modality_slices is not None else 1
+        # per-modality pooling -> scalar; use a shared MLP to predict weights
+        # Input to MLP will be concatenation of per-modality pooled scalars
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.mlp = nn.Sequential(
+            nn.Linear(self.n_modalities, hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden, self.n_modalities),
+            nn.Sigmoid(),
+        )
 
-        # small MLP to produce a scalar logit per modality from that modality's features
-        self._mlps = nn.ModuleList()
-        for _ in range(self.num_modalities):
-            self._mlps.append(nn.Sequential(nn.Linear( max(1, input_dim if modality_slices is None else (1)), hidden),
-                                             nn.ReLU(),
-                                             nn.Linear(hidden, 1)))
-
-        # numeric stability
-        self.eps = 1e-6
-
-    def forward(self, concat_features: torch.Tensor) -> torch.Tensor:
-        """Apply predicted discounts to `concat_features` and return discounted tensor.
+    def forward(self, features: torch.Tensor, modality_sizes: Optional[List[int]] = None):
+        """Forward.
 
         Args:
-            concat_features: (batch, input_dim) concatenated modality features
+            features: (batch, total_dim) concatenated modality features
+            modality_sizes: optional override for modality sizes
 
         Returns:
-            discounted: (batch, input_dim)
+            fused: (batch, total_dim) fused (discounted & concatenated) features
         """
-        if concat_features.dim() != 2:
-            raise ValueError("concat_features must be (batch, input_dim)")
-        batch = concat_features.shape[0]
-        if self.modality_slices is None:
-            # global discount scalar
-            x = concat_features.mean(dim=1, keepdim=True)  # (batch,1)
-            logit = self._mlps[0](x)
-            weight = torch.sigmoid(logit)  # (batch,1)
-            return concat_features * weight
+        if modality_sizes is None:
+            modality_sizes = self.modality_sizes
+        assert sum(modality_sizes) == features.shape[1], "modality sizes don't match feature dim"
 
-        # else compute per-modality weights
-        out = concat_features.clone()
-        for i, (start, end) in enumerate(self.modality_slices):
-            # slice features
-            sl = concat_features[:, start:end]
-            if sl.numel() == 0:
-                continue
-            # global pooling to produce small vector
-            pooled = sl.mean(dim=1, keepdim=True)
-            logit = self._mlps[i](pooled)
-            weight = torch.sigmoid(logit)  # (batch,1)
-            out[:, start:end] = sl * weight
+        # slice per-modality and compute pooled scalar per batch
+        parts = []
+        start = 0
+        pooled = []
+        for s in modality_sizes:
+            part = features[:, start:start + s]  # (batch, s)
+            parts.append(part)
+            # pool to scalar per modality
+            if s == 0:
+                pooled.append(features.new_zeros(features.shape[0], 1))
+            else:
+                p = part.unsqueeze(1) if part.dim() == 2 else part
+                # AdaptiveAvgPool1d expects (batch, channels, L); treat dim as channels
+                p = part.unsqueeze(1)
+                pooled_val = self.pool(p).squeeze(2)  # (batch, s) -> (batch, s) pooled to (batch,1)?
+                # reduce to scalar per modality by mean over channels
+                pooled.append(pooled_val.mean(dim=1, keepdim=True))
+            start += s
 
-        return out
+        pooled_cat = torch.cat(pooled, dim=1)  # (batch, n_modalities)
+        weights = self.mlp(pooled_cat)  # (batch, n_modalities) in (0,1)
+
+        # apply weights per modality
+        fused_parts = []
+        for i, part in enumerate(parts):
+            w = weights[:, i:i+1]
+            fused_parts.append(part * w)
+
+        fused = torch.cat(fused_parts, dim=1)
+        return fused
